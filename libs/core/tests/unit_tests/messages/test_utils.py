@@ -677,6 +677,46 @@ def test_trim_messages_start_on_with_allow_partial() -> None:
     assert messages == messages_copy
 
 
+def _order_sensitive_token_counter(messages: list[BaseMessage]) -> int:
+    """Count words and newlines, so the order lines are joined in matters.
+
+    Like BPE tokenizers, joining `c` before `b` + newline merges them into one
+    word, while the original order keeps them as separate tokens.
+    """
+    return sum(3 + len(re.findall(r"\w+|\n", msg.text)) for msg in messages)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "a\nb\nc",
+        [
+            {"type": "text", "text": "a\n"},
+            {"type": "text", "text": "b\n"},
+            {"type": "text", "text": "c"},
+        ],
+    ],
+)
+def test_trim_messages_last_allow_partial_measures_returned_order(
+    content: str | list[str | dict[str, Any]],
+) -> None:
+    messages = [HumanMessage(content)]
+    messages_copy = [m.model_copy(deep=True) for m in messages]
+    max_tokens = 5
+
+    result = trim_messages(
+        messages,
+        max_tokens=max_tokens,
+        token_counter=_order_sensitive_token_counter,
+        strategy="last",
+        allow_partial=True,
+    )
+
+    assert _order_sensitive_token_counter(result) <= max_tokens
+    assert [m.text for m in result] == ["c"]
+    assert messages == messages_copy
+
+
 def test_trim_messages_token_counter_shortcut_approximate() -> None:
     """Test that `'approximate'` shortcut works for `token_counter`."""
     messages = [

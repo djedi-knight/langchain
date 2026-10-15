@@ -2026,18 +2026,19 @@ def _first_max_tokens(
         if isinstance(messages[idx].content, list):
             excluded = messages[idx].model_copy(deep=True)
             copied = True
-            num_block = len(excluded.content)
-            if partial_strategy == "last":
-                excluded.content = list(reversed(excluded.content))
-            for _ in range(1, num_block):
-                excluded.content = excluded.content[:-1]
+            blocks = list(excluded.content)
+            for num_kept in range(len(blocks) - 1, 0, -1):
+                # Measure each candidate in the order it will be returned.
+                excluded.content = (
+                    blocks[-num_kept:]
+                    if partial_strategy == "last"
+                    else blocks[:num_kept]
+                )
                 if token_counter([*messages[:idx], excluded]) <= max_tokens:
                     messages = [*messages[:idx], excluded]
                     idx += 1
                     included_partial = True
                     break
-            if included_partial and partial_strategy == "last":
-                excluded.content = list(reversed(excluded.content))
         if not included_partial:
             if not copied:
                 excluded = messages[idx].model_copy(deep=True)
@@ -2072,7 +2073,13 @@ def _first_max_tokens(
                     if left >= right:
                         break
                     mid = (left + right + 1) // 2
-                    excluded.content = "".join(split_texts[:mid])
+                    candidate_splits = split_texts[:mid]
+                    if partial_strategy == "last":
+                        # Restore the original order so the candidate is measured
+                        # exactly as it will be returned. Joining the reversed
+                        # splits can merge lines and undercount tokens.
+                        candidate_splits = candidate_splits[::-1]
+                    excluded.content = "".join(candidate_splits)
                     if base_message_count + token_counter([excluded]) <= max_tokens:
                         left = mid
                     else:

@@ -677,6 +677,111 @@ def test_trim_messages_start_on_with_allow_partial() -> None:
     assert messages == messages_copy
 
 
+_REQUEST_OVERHEAD_TOKENS = 5
+
+
+def _request_overhead_token_counter(messages: list[BaseMessage]) -> int:
+    """Count 2 tokens per message plus 1 per non-empty line of text.
+
+    Adds a fixed cost once per call, the way real counters add tool schemas or
+    reply priming tokens once per request rather than once per message.
+    """
+    count = _REQUEST_OVERHEAD_TOKENS
+    for msg in messages:
+        lines = [line for line in msg.text.split("\n") if line]
+        count += 2 + len(lines)
+    return count
+
+
+def test_trim_messages_last_include_system_counts_request_overhead_once() -> None:
+    messages = [
+        SystemMessage("s"),
+        HumanMessage("q1"),
+        AIMessage("a1"),
+        HumanMessage("q2"),
+    ]
+    budget = _request_overhead_token_counter(messages)
+
+    result = trim_messages(
+        messages,
+        max_tokens=budget,
+        token_counter=_request_overhead_token_counter,
+        strategy="last",
+        include_system=True,
+    )
+
+    assert result == messages
+
+
+def test_trim_messages_last_include_system_with_tools_counter() -> None:
+    lookup_tool = {
+        "name": "lookup",
+        "description": "Look up a record by id",
+        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+    }
+
+    def token_counter(messages: list[BaseMessage]) -> int:
+        return count_tokens_approximately(messages, tools=[lookup_tool])
+
+    messages = [
+        SystemMessage("You are helpful."),
+        HumanMessage("hi"),
+        AIMessage("hello"),
+        HumanMessage("what is the weather?"),
+    ]
+
+    result = trim_messages(
+        messages,
+        max_tokens=token_counter(messages),
+        token_counter=token_counter,
+        strategy="last",
+        include_system=True,
+    )
+
+    assert result == messages
+
+
+def test_trim_messages_first_allow_partial_counts_request_overhead_once() -> None:
+    messages = [HumanMessage("a"), HumanMessage("l1\nl2\nl3")]
+    messages_copy = [m.model_copy(deep=True) for m in messages]
+    budget = _request_overhead_token_counter([HumanMessage("a"), HumanMessage("l1")])
+
+    result = trim_messages(
+        messages,
+        max_tokens=budget,
+        token_counter=_request_overhead_token_counter,
+        strategy="first",
+        allow_partial=True,
+    )
+
+    assert [m.content for m in result] == ["a", "l1\n"]
+    assert messages == messages_copy
+
+
+def test_trim_messages_last_allow_partial_counts_request_overhead_once() -> None:
+    messages = [
+        SystemMessage("s"),
+        HumanMessage("l1\nl2\nl3\n"),
+        HumanMessage("z"),
+    ]
+    messages_copy = [m.model_copy(deep=True) for m in messages]
+    budget = _request_overhead_token_counter(
+        [SystemMessage("s"), HumanMessage("l3"), HumanMessage("z")]
+    )
+
+    result = trim_messages(
+        messages,
+        max_tokens=budget,
+        token_counter=_request_overhead_token_counter,
+        strategy="last",
+        allow_partial=True,
+        include_system=True,
+    )
+
+    assert [m.content for m in result] == ["s", "l3\n", "z"]
+    assert messages == messages_copy
+
+
 def test_trim_messages_token_counter_shortcut_approximate() -> None:
     """Test that `'approximate'` shortcut works for `token_counter`."""
     messages = [

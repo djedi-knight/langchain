@@ -2061,7 +2061,6 @@ def _first_max_tokens(
                     excluded = excluded.model_copy(deep=True)
 
                 split_texts = text_splitter(text)
-                base_message_count = token_counter(messages[:idx])
                 if partial_strategy == "last":
                     split_texts = list(reversed(split_texts))
 
@@ -2073,7 +2072,9 @@ def _first_max_tokens(
                         break
                     mid = (left + right + 1) // 2
                     excluded.content = "".join(split_texts[:mid])
-                    if base_message_count + token_counter([excluded]) <= max_tokens:
+                    # Count the candidate together with the kept messages so
+                    # request-level costs (e.g. tool schemas) are counted once.
+                    if token_counter([*messages[:idx], excluded]) <= max_tokens:
                         left = mid
                     else:
                         right = mid - 1
@@ -2128,16 +2129,20 @@ def _last_max_tokens(
     # Reverse messages to use _first_max_tokens with reversed logic
     reversed_messages = messages[::-1]
 
-    # Calculate remaining tokens after accounting for system message if present
-    remaining_tokens = max_tokens
-    if system_message:
-        system_tokens = token_counter([system_message])
-        remaining_tokens = max(0, max_tokens - system_tokens)
+    # Count each candidate as the message list that will actually be returned:
+    # restored to chronological order and with the preserved system message
+    # prepended. Subtracting a separately counted system message from the budget
+    # would double-count request-level costs (e.g. tool schemas or reply priming
+    # tokens) that a token counter adds once per call.
+    prefix = [system_message] if system_message else []
+
+    def _count_reversed(candidate: list[BaseMessage]) -> int:
+        return token_counter([*prefix, *candidate[::-1]])
 
     reversed_result = _first_max_tokens(
         reversed_messages,
-        max_tokens=remaining_tokens,
-        token_counter=token_counter,
+        max_tokens=max_tokens,
+        token_counter=_count_reversed,
         text_splitter=text_splitter,
         partial_strategy="last" if allow_partial else None,
         end_on=start_on,
